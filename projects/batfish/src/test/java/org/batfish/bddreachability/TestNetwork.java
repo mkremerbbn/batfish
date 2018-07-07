@@ -18,6 +18,7 @@ import org.batfish.datamodel.NetworkFactory;
 import org.batfish.datamodel.Prefix;
 import org.batfish.datamodel.SourceNat;
 import org.batfish.datamodel.StaticRoute;
+import org.batfish.datamodel.SubRange;
 import org.batfish.datamodel.Vrf;
 import org.batfish.main.Batfish;
 import org.batfish.main.BatfishTestUtils;
@@ -31,6 +32,7 @@ final class TestNetwork {
   static final Prefix LINK_2_NETWORK = Prefix.parse("2.0.0.0/31");
   static final Ip SOURCE_NAT_ACL_IP = new Ip("5.5.5.5");
   static final Ip SOURCE_NAT_POOL_IP = new Ip("6.6.6.6");
+  static final int POST_SOURCE_NAT_ACL_DEST_PORT = 1234;
 
   final Batfish _batfish;
   final SortedMap<String, Configuration> _configs;
@@ -92,7 +94,17 @@ final class TestNetwork {
                     IpAccessListLine.acceptingHeaderSpace(
                         HeaderSpace.builder().setSrcIps(SOURCE_NAT_ACL_IP.toIpSpace()).build())))
             .build();
-
+    IpAccessList link2PostSourceNatAcl =
+        nf.aclBuilder()
+            .setOwner(_srcNode)
+            .setLines(
+                ImmutableList.of(
+                    IpAccessListLine.acceptingHeaderSpace(
+                        HeaderSpace.builder()
+                            .setDstPorts(
+                                ImmutableList.of(new SubRange(POST_SOURCE_NAT_ACL_DEST_PORT)))
+                            .build())))
+            .build();
     _link2Src =
         ib.setAddress(
                 new InterfaceAddress(LINK_2_NETWORK.getStartIp(), LINK_2_NETWORK.getPrefixLength()))
@@ -103,12 +115,13 @@ final class TestNetwork {
                         .setPoolIpFirst(SOURCE_NAT_POOL_IP)
                         .setPoolIpLast(SOURCE_NAT_POOL_IP)
                         .build()))
+            .setOutgoingFilter(link2PostSourceNatAcl)
             .setOwner(_srcNode)
             .setVrf(srcVrf)
             .build();
 
-    // unset source nats
     ib.setSourceNats(null);
+    ib.setOutgoingFilter(null);
 
     _link2Dst =
         ib.setAddress(

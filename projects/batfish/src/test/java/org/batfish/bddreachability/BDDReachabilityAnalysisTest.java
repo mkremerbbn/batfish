@@ -4,6 +4,7 @@ import static org.batfish.bddreachability.TestNetwork.DST_PREFIX_1;
 import static org.batfish.bddreachability.TestNetwork.DST_PREFIX_2;
 import static org.batfish.bddreachability.TestNetwork.LINK_1_NETWORK;
 import static org.batfish.bddreachability.TestNetwork.LINK_2_NETWORK;
+import static org.batfish.bddreachability.TestNetwork.POST_SOURCE_NAT_ACL_DEST_PORT;
 import static org.batfish.bddreachability.TestNetwork.SOURCE_NAT_ACL_IP;
 import static org.batfish.bddreachability.TestNetwork.SOURCE_NAT_POOL_IP;
 import static org.batfish.datamodel.Configuration.DEFAULT_VRF_NAME;
@@ -13,6 +14,7 @@ import static org.batfish.symbolic.bdd.BDDMatchers.isOne;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.hasEntry;
 import static org.hamcrest.Matchers.hasKey;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.not;
@@ -25,6 +27,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import net.sf.javabdd.BDD;
+import org.batfish.bddreachability.BDDReachabilityAnalysis.MultipathConsistencyViolation;
 import org.batfish.datamodel.Configuration;
 import org.batfish.datamodel.DataPlane;
 import org.batfish.datamodel.Ip;
@@ -80,14 +83,11 @@ public final class BDDReachabilityAnalysisTest {
   private PreOutEdgePostNat _dstPreOutEdgePostNat2;
   private PreOutVrf _dstPreOutVrf;
 
-  private Ip _link1DstIp;
   private BDD _link1DstIpBDD;
   private String _link1DstName;
 
   private BDD _link1SrcIpBDD;
-  private String _link1SrcName;
 
-  private Ip _link2DstIp;
   private BDD _link2DstIpBDD;
   private String _link2DstName;
 
@@ -136,15 +136,12 @@ public final class BDDReachabilityAnalysisTest {
     _dstPostInVrf = new PostInVrf(_dstName, DEFAULT_VRF_NAME);
     _dstPreOutVrf = new PreOutVrf(_dstName, DEFAULT_VRF_NAME);
 
-    _link1DstIp = LINK_1_NETWORK.getEndIp();
-    _link1DstIpBDD = dstIpBDD(_link1DstIp);
+    _link1DstIpBDD = dstIpBDD(LINK_1_NETWORK.getEndIp());
     _link1DstName = NET._link1Dst.getName();
 
-    _link1SrcName = NET._link1Src.getName();
     _link1SrcIpBDD = dstIpBDD(LINK_1_NETWORK.getStartIp());
 
-    _link2DstIp = LINK_2_NETWORK.getEndIp();
-    _link2DstIpBDD = dstIpBDD(_link2DstIp);
+    _link2DstIpBDD = dstIpBDD(LINK_2_NETWORK.getEndIp());
     _link2DstName = NET._link2Dst.getName();
 
     _link2SrcIpBDD = dstIpBDD(LINK_2_NETWORK.getStartIp());
@@ -157,19 +154,19 @@ public final class BDDReachabilityAnalysisTest {
     _dstPreInInterface1 = new PreInInterface(_dstName, _link1DstName);
     _dstPreInInterface2 = new PreInInterface(_dstName, _link2DstName);
 
-    _srcPreInInterface1 = new PreInInterface(_srcName, _link1SrcName);
+    _srcPreInInterface1 = new PreInInterface(_srcName, NET._link1Src.getName());
     _srcPreInInterface2 = new PreInInterface(_srcName, _link2SrcName);
 
-    _dstPreOutEdge1 = new PreOutEdge(_dstName, _link1DstName, _srcName, _link1SrcName);
+    _dstPreOutEdge1 = new PreOutEdge(_dstName, _link1DstName, _srcName, NET._link1Src.getName());
     _dstPreOutEdge2 = new PreOutEdge(_dstName, _link2DstName, _srcName, _link2SrcName);
     _dstPreOutEdgePostNat1 =
-        new PreOutEdgePostNat(_dstName, _link1DstName, _srcName, _link1SrcName);
+        new PreOutEdgePostNat(_dstName, _link1DstName, _srcName, NET._link1Src.getName());
     _dstPreOutEdgePostNat2 =
         new PreOutEdgePostNat(_dstName, _link2DstName, _srcName, _link2SrcName);
-    _srcPreOutEdge1 = new PreOutEdge(_srcName, _link1SrcName, _dstName, _link1DstName);
+    _srcPreOutEdge1 = new PreOutEdge(_srcName, NET._link1Src.getName(), _dstName, _link1DstName);
     _srcPreOutEdge2 = new PreOutEdge(_srcName, _link2SrcName, _dstName, _link2DstName);
     _srcPreOutEdgePostNat1 =
-        new PreOutEdgePostNat(_srcName, _link1SrcName, _dstName, _link1DstName);
+        new PreOutEdgePostNat(_srcName, NET._link1Src.getName(), _dstName, _link1DstName);
     _srcPreOutEdgePostNat2 =
         new PreOutEdgePostNat(_srcName, _link2SrcName, _dstName, _link2DstName);
     _srcPreOutVrf = new PreOutVrf(_srcName, DEFAULT_VRF_NAME);
@@ -191,6 +188,10 @@ public final class BDDReachabilityAnalysisTest {
 
   private static BDD dstIpBDD(Ip ip) {
     return new IpSpaceToBDD(BDDPacket.factory, new BDDPacket().getDstIp()).toBDD(ip);
+  }
+
+  private static BDD dstPortBDD(int destPort) {
+    return new BDDPacket().getDstPort().value(destPort);
   }
 
   private static BDD srcIpBDD(Ip ip) {
@@ -274,10 +275,6 @@ public final class BDDReachabilityAnalysisTest {
   public void testBDDTransitions_PreOutVrf_outEdges() {
     String link1SrcName = NET._link1Src.getName();
     String link2SrcName = NET._link2Src.getName();
-    PreOutEdgePostNat link1PreOutEdgePostNat =
-        new PreOutEdgePostNat(_srcName, link1SrcName, _dstName, _link1DstName);
-    PreOutEdgePostNat link2PreOutEdgePostNat =
-        new PreOutEdgePostNat(_srcName, link2SrcName, _dstName, _link2DstName);
     BDD nodeDropNullRoute = bddTransition(_srcPreOutVrf, new NodeDropNullRoute(_srcName));
     BDD nodeInterfaceNeighborUnreachable1 =
         bddTransition(_srcPreOutVrf, new NodeInterfaceNeighborUnreachable(_srcName, link1SrcName));
@@ -285,11 +282,13 @@ public final class BDDReachabilityAnalysisTest {
         bddTransition(_srcPreOutVrf, new NodeInterfaceNeighborUnreachable(_srcName, link2SrcName));
     BDD preOutEdge1 = bddTransition(_srcPreOutVrf, _srcPreOutEdge1);
     BDD preOutEdge2 = bddTransition(_srcPreOutVrf, _srcPreOutEdge2);
+    BDD postNatAclBDD = dstPortBDD(POST_SOURCE_NAT_ACL_DEST_PORT);
 
     assertThat(nodeDropNullRoute, nullValue());
 
     assertThat(nodeInterfaceNeighborUnreachable1, isEquivalentTo(_link1SrcIpBDD));
-    assertThat(nodeInterfaceNeighborUnreachable2, isEquivalentTo(_link2SrcIpBDD));
+    assertThat(
+        nodeInterfaceNeighborUnreachable2, isEquivalentTo(_link2SrcIpBDD.and(postNatAclBDD)));
 
     assertThat(
         bddIps(preOutEdge1),
@@ -341,7 +340,9 @@ public final class BDDReachabilityAnalysisTest {
     assertThat(bddTransition(_dstPreOutEdgePostNat1, new NodeDropAclOut(_dstName)), nullValue());
     assertThat(bddTransition(_dstPreOutEdgePostNat2, new NodeDropAclOut(_dstName)), nullValue());
     assertThat(bddTransition(_srcPreOutEdgePostNat1, new NodeDropAclOut(_srcName)), nullValue());
-    assertThat(bddTransition(_srcPreOutEdgePostNat2, new NodeDropAclOut(_srcName)), nullValue());
+    assertThat(
+        bddTransition(_srcPreOutEdgePostNat2, new NodeDropAclOut(_srcName)),
+        isEquivalentTo(dstPortBDD(POST_SOURCE_NAT_ACL_DEST_PORT).not()));
   }
 
   @Test
@@ -349,7 +350,9 @@ public final class BDDReachabilityAnalysisTest {
     assertThat(bddTransition(_dstPreOutEdgePostNat1, _srcPreInInterface1), isOne());
     assertThat(bddTransition(_dstPreOutEdgePostNat2, _srcPreInInterface2), isOne());
     assertThat(bddTransition(_srcPreOutEdgePostNat1, _dstPreInInterface1), isOne());
-    assertThat(bddTransition(_srcPreOutEdgePostNat2, _dstPreInInterface2), isOne());
+    assertThat(
+        bddTransition(_srcPreOutEdgePostNat2, _dstPreInInterface2),
+        isEquivalentTo(dstPortBDD(POST_SOURCE_NAT_ACL_DEST_PORT)));
   }
 
   @Test
@@ -371,14 +374,17 @@ public final class BDDReachabilityAnalysisTest {
 
     BDDReachabilityAnalysis graph =
         GRAPH_FACTORY.bddNetworkGraph(assignment, _dstIface2Ip.toIpSpace());
-    graph.computeReachability();
 
     BDD dstIpBDD = GRAPH_FACTORY.getIpSpaceToBDD().toBDD(_dstIface2Ip);
     BDD natPoolIpBDD = srcIpBDD(SOURCE_NAT_POOL_IP);
     BDD natAclIpBDD = srcIpBDD(SOURCE_NAT_ACL_IP);
+    BDD postNatAclBDD = dstPortBDD(POST_SOURCE_NAT_ACL_DEST_PORT);
 
     BDD srcNatAclBDD = BDDAcl.create(NET._link2SrcSourceNatAcl).getBdd();
     assertThat(srcNatAclBDD, isEquivalentTo(natAclIpBDD));
+
+    BDD unNattedHeader = dstIpBDD.and(natAclIpBDD);
+    BDD nattedHeader = dstIpBDD.and(natPoolIpBDD).and(postNatAclBDD);
 
     OriginateVrf originateVrf = new OriginateVrf(_srcName, Configuration.DEFAULT_VRF_NAME);
     PreOutEdgePostNat preOutEdge2PostNat =
@@ -389,19 +395,38 @@ public final class BDDReachabilityAnalysisTest {
     assertThat(natRoots, hasKey(originateVrf));
     StateExpr logicalRoot = natRoots.get(originateVrf);
 
-    BDD preOutEdgePostNatLink2 = graph._reachableStates.get(preOutEdge2PostNat).get(logicalRoot);
-
-    assertThat(preOutEdgePostNatLink2, isEquivalentTo(dstIpBDD.and(natPoolIpBDD)));
-
-    List<BDDReachabilityAnalysis.MultipathConsistencyViolation> violations =
-        graph.detectMultipathInconsistency();
+    /*
+     * Before backward-propagation, it's difficult the see the multipath inconsistency.
+     * Accept gets nattedHeader originating from logicalRoot, and Drop gets unNattedHeader
+     * originating from originateVrf.
+     */
+    Map<StateExpr, Map<StateExpr, BDD>> reachableStates = graph.getReachableStates();
+    assertThat(reachableStates.get(Accept.INSTANCE), hasEntry(logicalRoot, nattedHeader));
+    assertThat(reachableStates.get(Drop.INSTANCE), hasEntry(originateVrf, unNattedHeader));
 
     /*
-     * TODO: we should get a violation here, but it's masked because NAT only occurs along one path.
-     * The solution is to map back to the original headerspaces, and report violations based on
-     * those.
+     * After backward-propagation, we can see the inconsistency more clearly. The sets of
+     * packets that reach Accept and Drop from originateVrf overlap...
      */
-    assertThat(violations, hasSize(0));
+    BDD unNattedHeaderWithPostNatAclConstraint = unNattedHeader.and(postNatAclBDD);
+    Map<StateExpr, Map<StateExpr, BDD>> rootToLeafBDDs = graph.getRootToLeafBDDs();
+    assertThat(
+        rootToLeafBDDs,
+        hasEntry(
+            equalTo(originateVrf),
+            hasEntry(Accept.INSTANCE, unNattedHeaderWithPostNatAclConstraint)));
+    assertThat(
+        rootToLeafBDDs, hasEntry(equalTo(originateVrf), hasEntry(Drop.INSTANCE, unNattedHeader)));
+
+    /*
+     * ... and we detect a violation for the intersection.
+     */
+    List<MultipathConsistencyViolation> violations = graph.detectMultipathInconsistency();
+    assertThat(violations, hasSize(1));
+    MultipathConsistencyViolation violation = violations.get(0);
+    assertThat(violation.originateState, equalTo(originateVrf));
+    assertThat(violation.finalStates, equalTo(ImmutableSet.of(Accept.INSTANCE, Drop.INSTANCE)));
+    assertThat(violation.predicate, isEquivalentTo(unNattedHeaderWithPostNatAclConstraint));
   }
 
   @Test
@@ -415,24 +440,23 @@ public final class BDDReachabilityAnalysisTest {
 
     BDDReachabilityAnalysis graph =
         GRAPH_FACTORY.bddNetworkGraph(assignment, _dstIface2Ip.toIpSpace());
-    graph.computeReachability();
 
     BDD dstIpBDD = GRAPH_FACTORY.getIpSpaceToBDD().toBDD(_dstIface2Ip);
     BDD srcIpBDD = srcIpBDD(Ip.MAX);
+    BDD postNatAclBDD = dstPortBDD(POST_SOURCE_NAT_ACL_DEST_PORT);
 
     OriginateVrf originateVrf = new OriginateVrf(_srcName, Configuration.DEFAULT_VRF_NAME);
     BDD preOutEdgePostNatLink2 =
         graph
-            ._reachableStates
+            .getReachableStates()
             .get(new PreOutEdgePostNat(_srcName, _link2SrcName, _dstName, _link2DstName))
             .get(originateVrf);
 
     assertThat(preOutEdgePostNatLink2, isEquivalentTo(dstIpBDD.and(srcIpBDD)));
-    List<BDDReachabilityAnalysis.MultipathConsistencyViolation> violations =
-        graph.detectMultipathInconsistency();
+    List<MultipathConsistencyViolation> violations = graph.detectMultipathInconsistency();
     assertThat(violations, hasSize(1));
-    BDDReachabilityAnalysis.MultipathConsistencyViolation violation = violations.get(0);
+    MultipathConsistencyViolation violation = violations.get(0);
     assertThat(violation.finalStates, equalTo(ImmutableSet.of(Accept.INSTANCE, Drop.INSTANCE)));
-    assertThat(violation.predicate, isEquivalentTo(dstIpBDD.and(srcIpBDD)));
+    assertThat(violation.predicate, isEquivalentTo(dstIpBDD.and(srcIpBDD).and(postNatAclBDD)));
   }
 }

@@ -558,6 +558,7 @@ public final class BDDReachabilityAnalysisFactory {
                   aclName == null
                       ? BDDPacket.factory.one()
                       : _aclPermitBDDs.get(node1).get(aclName);
+              assert aclPermitBDD != null;
 
               return new Edge(
                   new PreOutEdgePostNat(node1, iface1, node2, iface2),
