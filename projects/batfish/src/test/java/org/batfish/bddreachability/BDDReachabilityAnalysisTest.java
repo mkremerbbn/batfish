@@ -8,6 +8,7 @@ import static org.batfish.bddreachability.TestNetwork.POST_SOURCE_NAT_ACL_DEST_P
 import static org.batfish.bddreachability.TestNetwork.SOURCE_NAT_ACL_IP;
 import static org.batfish.bddreachability.TestNetwork.SOURCE_NAT_POOL_IP;
 import static org.batfish.datamodel.Configuration.DEFAULT_VRF_NAME;
+import static org.batfish.datamodel.matchers.FlowMatchers.hasDstIp;
 import static org.batfish.symbolic.bdd.BDDMatchers.intersects;
 import static org.batfish.symbolic.bdd.BDDMatchers.isEquivalentTo;
 import static org.batfish.symbolic.bdd.BDDMatchers.isOne;
@@ -27,9 +28,9 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import net.sf.javabdd.BDD;
-import org.batfish.bddreachability.BDDReachabilityAnalysis.MultipathConsistencyViolation;
 import org.batfish.datamodel.Configuration;
 import org.batfish.datamodel.DataPlane;
+import org.batfish.datamodel.Flow;
 import org.batfish.datamodel.Ip;
 import org.batfish.datamodel.UniverseIpSpace;
 import org.batfish.specifier.InterfaceLocation;
@@ -60,6 +61,7 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 
 public final class BDDReachabilityAnalysisTest {
+  private static final String FLOW_TAG = "FLOW_TAG";
   private static BDDReachabilityAnalysis GRAPH;
   private static BDDReachabilityAnalysisFactory GRAPH_FACTORY;
   private static TestNetwork NET;
@@ -421,12 +423,13 @@ public final class BDDReachabilityAnalysisTest {
     /*
      * ... and we detect a violation for the intersection.
      */
-    List<MultipathConsistencyViolation> violations = graph.detectMultipathInconsistency();
-    assertThat(violations, hasSize(1));
-    MultipathConsistencyViolation violation = violations.get(0);
-    assertThat(violation.originateState, equalTo(originateVrf));
-    assertThat(violation.finalStates, equalTo(ImmutableSet.of(Accept.INSTANCE, Drop.INSTANCE)));
-    assertThat(violation.predicate, isEquivalentTo(unNattedHeaderWithPostNatAclConstraint));
+    List<MultipathInconsistency> inconsistencies = graph.computeMultipathInconsistencies();
+    assertThat(inconsistencies, hasSize(1));
+    MultipathInconsistency inconsistency = inconsistencies.get(0);
+    assertThat(inconsistency.getOriginateState(), equalTo(originateVrf));
+    assertThat(
+        inconsistency.getFinalStates(), equalTo(ImmutableSet.of(Accept.INSTANCE, Drop.INSTANCE)));
+    assertThat(inconsistency.getBDD(), isEquivalentTo(unNattedHeaderWithPostNatAclConstraint));
   }
 
   @Test
@@ -453,10 +456,14 @@ public final class BDDReachabilityAnalysisTest {
             .get(originateVrf);
 
     assertThat(preOutEdgePostNatLink2, isEquivalentTo(dstIpBDD.and(srcIpBDD)));
-    List<MultipathConsistencyViolation> violations = graph.detectMultipathInconsistency();
-    assertThat(violations, hasSize(1));
-    MultipathConsistencyViolation violation = violations.get(0);
-    assertThat(violation.finalStates, equalTo(ImmutableSet.of(Accept.INSTANCE, Drop.INSTANCE)));
-    assertThat(violation.predicate, isEquivalentTo(dstIpBDD.and(srcIpBDD).and(postNatAclBDD)));
+    List<MultipathInconsistency> inconsistencies = graph.computeMultipathInconsistencies();
+    assertThat(inconsistencies, hasSize(1));
+    MultipathInconsistency inconsistency = inconsistencies.get(0);
+    assertThat(
+        inconsistency.getFinalStates(), equalTo(ImmutableSet.of(Accept.INSTANCE, Drop.INSTANCE)));
+    assertThat(inconsistency.getBDD(), isEquivalentTo(dstIpBDD.and(srcIpBDD).and(postNatAclBDD)));
+
+    Flow flow = graph.multipathInconsistencyToFlow(inconsistency, FLOW_TAG);
+    assertThat(flow, hasDstIp(_dstIface2Ip));
   }
 }

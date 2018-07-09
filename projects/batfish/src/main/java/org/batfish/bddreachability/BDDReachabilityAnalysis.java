@@ -2,6 +2,7 @@ package org.batfish.bddreachability;
 
 import static org.batfish.common.util.CommonUtil.toImmutableMap;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -21,6 +22,7 @@ import java.util.stream.Stream;
 import net.sf.javabdd.BDD;
 import org.batfish.common.BatfishException;
 import org.batfish.datamodel.Flow;
+import org.batfish.datamodel.Flow.Builder;
 import org.batfish.symbolic.bdd.BDDOps;
 import org.batfish.symbolic.bdd.BDDPacket;
 import org.batfish.z3.expr.StateExpr;
@@ -58,44 +60,6 @@ public class BDDReachabilityAnalysis {
       _natPosition = natPosition;
       _originalRoot = originalRoot;
       _sourceNats = sourceNats;
-    }
-  }
-
-  public class MultipathConsistencyViolation {
-    public final StateExpr originateState;
-    public final Set<StateExpr> finalStates;
-    public final BDD predicate;
-
-    private MultipathConsistencyViolation(
-        StateExpr originateState, Set<StateExpr> finalStates, BDD predicate) {
-      this.originateState = originateState;
-      this.finalStates = ImmutableSet.copyOf(finalStates);
-      this.predicate = predicate;
-    }
-
-    public Flow getFlow(String tag) {
-      Flow.Builder fb =
-          _bddPacket
-              .getFlow(this.predicate)
-              .orElseGet(
-                  () -> {
-                    throw new BatfishException(
-                        "MultipathConsistencyViolation with UNSAT predicate");
-                  });
-      fb.setTag(tag);
-      if (originateState instanceof OriginateVrf) {
-        OriginateVrf originateVrf = (OriginateVrf) originateState;
-        fb.setIngressNode(originateVrf.getHostname());
-        fb.setIngressVrf(originateVrf.getVrf());
-      } else if (originateState instanceof OriginateInterfaceLink) {
-        OriginateInterfaceLink originateInterfaceLink = (OriginateInterfaceLink) originateState;
-        fb.setIngressNode(originateInterfaceLink.getHostname());
-        fb.setIngressInterface(originateInterfaceLink.getIface());
-      } else {
-        throw new BatfishException(
-            "Unexpected originateState type: " + originateState.getClass().getSimpleName());
-      }
-      return fb.build();
     }
   }
 
@@ -307,10 +271,11 @@ public class BDDReachabilityAnalysis {
   }
 
   /**
-   * Return a list of {@link MultipathConsistencyViolation multipath consistency violations}
-   * detected in the network.
+   * Return a list of {@link MultipathInconsistency multipath consistency violations} detected in
+   * the network.
    */
-  public List<MultipathConsistencyViolation> detectMultipathInconsistency() {
+  @VisibleForTesting
+  List<MultipathInconsistency> computeMultipathInconsistencies() {
     final class Candidate {
       private StateExpr _root;
       private StateExpr _leaf1;
@@ -328,7 +293,7 @@ public class BDDReachabilityAnalysis {
       }
     }
 
-    // generate candidates in parallel, since we can
+    // generate candidates in parallel
     List<Candidate> candidates =
         _rootToLeafBDDs
             .get()
@@ -359,6 +324,10 @@ public class BDDReachabilityAnalysis {
                 })
             .collect(Collectors.toList());
 
+    /*
+     * A candidate violation is real if the intersection of the BDDs at the leaves is
+     * non-empty. This step must be done sequentially.
+     */
     return candidates
         .stream()
         .flatMap(
@@ -367,11 +336,19 @@ public class BDDReachabilityAnalysis {
               return intersection.isZero()
                   ? Stream.empty()
                   : Stream.of(
-                      new MultipathConsistencyViolation(
+                      new MultipathInconsistency(
                           candidate._root,
                           ImmutableSet.of(candidate._leaf1, candidate._leaf2),
                           intersection));
             })
+        .collect(ImmutableList.toImmutableList());
+  }
+
+  /** Return a list of flows exhibiting multipath inconsistencies in the network. */
+  public List<Flow> multipathInconsistencies(String flowTag) {
+    return computeMultipathInconsistencies()
+        .stream()
+        .map(inconsistency -> multipathInconsistencyToFlow(inconsistency, flowTag))
         .collect(ImmutableList.toImmutableList());
   }
 
@@ -390,5 +367,31 @@ public class BDDReachabilityAnalysis {
 
   Map<StateExpr, Map<StateExpr, BDD>> getRootToLeafBDDs() {
     return _rootToLeafBDDs.get();
+  }
+
+  @VisibleForTesting
+  Flow multipathInconsistencyToFlow(MultipathInconsistency violation, String flowTag) {
+    Builder fb =
+        _bddPacket
+            .getFlow(violation.getBDD())
+            .orElseGet(
+                () -> {
+                  throw new BatfishException("MultipathConsistencyViolation with UNSAT predicate");
+                });
+    StateExpr originateState = violation.getOriginateState();
+    fb.setTag(flowTag);
+    if (originateState instanceof OriginateVrf) {
+      OriginateVrf originateVrf = (OriginateVrf) originateState;
+      fb.setIngressNode(originateVrf.getHostname());
+      fb.setIngressVrf(originateVrf.getVrf());
+    } else if (originateState instanceof OriginateInterfaceLink) {
+      OriginateInterfaceLink originateInterfaceLink = (OriginateInterfaceLink) originateState;
+      fb.setIngressNode(originateInterfaceLink.getHostname());
+      fb.setIngressInterface(originateInterfaceLink.getIface());
+    } else {
+      throw new BatfishException(
+          "Unexpected originateState type: " + originateState.getClass().getSimpleName());
+    }
+    return fb.build();
   }
 }
