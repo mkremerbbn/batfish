@@ -4702,8 +4702,15 @@ public class CiscoControlPlaneExtractor extends CiscoParserBaseListener
     requireNonNull(proc.getAsn());
     proc.computeNetworks(_configuration.getInterfaces().values());
 
+    // Check for duplicates in this VRF
     _currentVrf = proc.getVrf();
-    currentVrf().setEigrpProcess(proc);
+    Map<Long, EigrpProcess> eigrpProcesses = currentVrf().getEigrpProcesses();
+    boolean duplicate = eigrpProcesses.containsKey(proc.getAsn());
+    if (duplicate) {
+      _w.redFlag("Duplicate EIGRP router ASN");
+    } else {
+      eigrpProcesses.put(proc.getAsn(), proc);
+    }
 
     // Pop process if nested
     _currentEigrpProcess = _parentEigrpProcess;

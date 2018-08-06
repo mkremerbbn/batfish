@@ -3133,7 +3133,7 @@ public class Batfish extends PluginConsumer implements IBatfish {
         // router
         if (c.getDeviceType() == null
             && (vrf.getBgpProcess() != null
-                || vrf.getEigrpProcess() != null
+                || !vrf.getEigrpProcesses().isEmpty()
                 || vrf.getOspfProcess() != null
                 || vrf.getRipProcess() != null)) {
           c.setDeviceType(DeviceType.ROUTER);
